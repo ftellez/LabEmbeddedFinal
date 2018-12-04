@@ -1,4 +1,3 @@
-
 #include "samd21.h"
 #include "myprintf.h"
 
@@ -412,4 +411,3 @@ void tfp_printf2(char *fmt, ...)
 	abort:;
 	va_end(va);
 	}
-

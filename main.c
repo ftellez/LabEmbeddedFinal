@@ -1,96 +1,174 @@
-#include "samd21.h"
+/*
+ * RTOS_Test2.c
+ *
+ * Created: 12/1/2018 4:50:57 PM
+ * Author : BigJetPlane
+ */ 
+
+
+#include "sam.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+
+#include "uart.h"
 #include "myprintf.h"
+#include "stdbool.h"
+#include "RTCCONTROL.h"
 
-#define RXBUFSIZE 0x400
-#define LENGTH_R1 0x03
-#define LENGTH_R7 0x07
 
-void initSPI(void);
-void initUART(void);
+
+#define LCD_PINCFG	0x50000FC8
+#define LCD_PINMASK 0x00020400
+
+#define PIN13L	0x00020000
+
+#define SLAVE_ADDR 0x68u
+#define BUF_SIZE 7
+
+uint8_t SEGT, MINT,HOUT,DAYT,DATET,MOT,YEART;
+uint8_t SEGR,MINR,HOUR,DAYR,DATER,MOR,YEARR;
+
+
+
+
+sec_type SEG;
+min_type MIN;
+hour_type HOU;
+day_type DAY;
+date_type DATE;
+month_type MON;
+year_type YEAR;
+
+
+uint8_t *tx_buf[BUF_SIZE]={&SEGT,&MINT,&HOUT,&DAYT,&DATET,&MOT,&YEART};
+uint8_t *rx_buf[BUF_SIZE]={&SEGR,&MINR,&HOUR,&DAYR,&DATER,&MOR,&YEARR};
+	
+void ClockInit();
+void printStamp();
+void escrtTiempo();	
 void initUARTRasp(void);
-uint8_t spiSend(uint8_t data);
-uint8_t data,counter=0;
+
+
+
+void UART_SendChar(uint8_t charToSend) {
+	// Wait until buffer is available
+	static char TxBuff[6] ;
+	while(1){
+		
+		TxBuff[0] = SEG.reg;
+		TxBuff[1] = MIN.reg;
+		TxBuff[2] = HOU.reg;
+		TxBuff[3] = YEAR.reg;
+		TxBuff[4] = MON.reg;
+		TxBuff[5] = DATE.reg;
+		
+		for (int i = 0; i<6 ; i++){
+		
+	while (! ( SERCOM5->USART.INTFLAG.reg & SERCOM_USART_INTFLAG_DRE ) );
+	// Send data
+	SERCOM5->USART.DATA.reg = TxBuff[i];
+	
+		}
+		vTaskDelay(500);
+		
+		
+}
+}
+
+
+ const uint32_t Baud = 57600;
 
 int main(void)
 {
-  /* Initialize the SAM system */
-  SystemInit();
-  /* Switch to 8MHz clock (disable prescaler) */
-  SYSCTRL->OSC8M.bit.PRESC = 0;
-  initUART();
-  initUARTRasp();
-  //initSPI();
-  /*REG_PORT_OUTSET0 = PORT_PA17;
-  PORT->Group[0].DIRSET.reg = PORT_PA17;
-  REG_PORT_OUTCLR0 = PORT_PA07;*/
-  //sendToRasp("Hola Rasp\n");
-  //myprintf("YO SI SIRVO ");
-  //spiSend(0xFF);
- //REG_PORT_OUTSET0 = PORT_PA07;
-  //myprintf("Ya no sirve\n");
-  
-  data = receiveFromRasp();
-  while(data == 0) {data = receiveFromRasp();}
-  while(data != '\n') {data = receiveFromRasp();}
-  myprintf("Received from Raspberry start signal\n");
-  myprintf("Sending ACK to Raspberry\n");
-  sendToRasp("ACK\n");
-  //myprintf("ACK\n");
-  data = receiveFromRasp();
-  while(data == 0) {
-	sendToRasp("ACK\n");
-	data = receiveFromRasp();
-  }
-  while(data != '\n') {data = receiveFromRasp();}
-  myprintf("Connection established...\n");
+    /* Initialize the SAM system */
+    SystemInit();
+		SYSCTRL->OSC8M.bit.PRESC = 0;
+		PORT->Group[0].WRCONFIG.reg = LCD_PINCFG;
+	initUART();
+UART_Initialize(Baud);
+	initI2C();
+	ClockInit();
+	
+	PORT->Group[0].DIRSET.reg = LCD_PINMASK;
+	
 
-  myprintf("Sending data to Raspberry\n");
-  sendToRasp("I want to be in Google Spreadsheet!\n");
-  //myprintf("ACK\n");
-  data = receiveFromRasp();
-  while(data == 0) {
-	sendToRasp("I want to be in Google Spreadsheet!\n");
-	data = receiveFromRasp();
-  }
-  while(data != '\n') {data = receiveFromRasp();}
-  myprintf("Received ACK from Raspberry\n");
+	xTaskCreate(escrtTiempo, (signed char *) "RTCpull", 1024, NULL, 1, NULL );
+//	xTaskCreate(printStamp, (signed char *) "Serialprint", 1024, NULL, 2, NULL );
+	xTaskCreate( UART_SendChar, (signed char *) "Timestampsend", 1024, NULL, 2, NULL );
+	vTaskStartScheduler();
 
-  while (1) {}
+    /* Replace with your application code */
+    
 }
 
-void initUART(void) {
-	/* port mux configuration*/
-	PORT->Group[0].DIR.reg |= (1 << 10);                  /* Pin 10 configured as output */
-	PORT->Group[0].PINCFG[PIN_PA11].bit.PMUXEN = 1;       /* Enabling peripheral functions */
-	PORT->Group[0].PINCFG[PIN_PA10].bit.PMUXEN = 1;       /* Enabling peripheral functions */
+void ClockInit(){
 	
-	/*PMUX: even = n/2, odd: (n-1)/2 */
-	PORT->Group[0].PMUX[5].reg |= 0x02;                   /* Selecting peripheral function C */
-	PORT->Group[0].PMUX[5].reg |= 0x20;                   /* Selecting peripheral function C */
+	SEG.field.un_sec = 0x0;
+	SEG.field.dec_sec= 0x0;
+	MIN.field.un_min= 0x3;
+	MIN.field.dec_min= 0x2;
+	HOU.field.un_hour=0x4;
+	HOU.field.dec_hour=0x0;
+	HOU.field.am_pm= 0x1;
+	HOU.field.h1224=0x1 ;
+	DAY.field.day= 0x2;
+	DATE.field.un_date= 0x6 ;
+	DATE.field.dec_date= 0x1;
+	MON.field.un_month= 0x0;
+	MON.field.dec_mont= 0x1;
+	YEAR.field.un_year= 0x8;
+	YEAR.field.dec_year= 0x1;
 	
-	/* APBCMASK */
-	//PM->APBCMASK.reg |= PM_APBCMASK_SERCOM0;			  /* SERCOM 0 enable*/
-	PM->APBCMASK.reg |= PM_APBCMASK_SERCOM0;
+	SEGT= SEG.reg;
+	MINT= MIN.reg;
+	HOUT= HOU.reg;
+	DAYT= DAY.reg;
+	DATET= DATE.reg;
+	MOT= MON.reg;
+	YEART= YEAR.reg;
+	sendI2CDataArray(SLAVE_ADDR,tx_buf , BUF_SIZE,SEC_ADDR);
+	StopCond();
 
-	/*GCLK configuration for sercom0 module: using generic clock generator 0, ID for sercom0, enable GCLK*/
+}
 
-	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(SERCOM0_GCLK_ID_CORE) |
-	GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN(0);
-
+void printStamp(){
 	
-	/* configure SERCOM0 module for UART as Standard Frame, 8 Bit size, No parity, BAUDRATE:9600*/
-
-	SERCOM0->USART.CTRLA.reg =
-	SERCOM_USART_CTRLA_DORD | SERCOM_USART_CTRLA_MODE_USART_INT_CLK |
-	SERCOM_USART_CTRLA_RXPO(3/*PAD3*/) | SERCOM_USART_CTRLA_TXPO(1/*PAD2*/);
+	while(1){
+	//Date/Month/Year/Hours/Minutes/Seconds
+	myprintf("%d%d/%d%d/20%d%d/", DATE.field.dec_date,DATE.field.un_date,MON.field.dec_mont,MON.field.un_month,YEAR.field.dec_year,YEAR.field.un_year);
+	if(HOU.field.h1224 == 1){
+		if(HOU.field.am_pm==1){
+			myprintf("%d%d:%d%d:%d%d PM\n",HOU.field.dec_hour,HOU.field.un_hour,MIN.field.dec_min,MIN.field.un_min,SEG.field.dec_sec,SEG.field.un_sec);
+		}
+		else{
+			myprintf("%d%d:%d%d:%d%d AM\n",HOU.field.dec_hour,HOU.field.un_hour,MIN.field.dec_min,MIN.field.un_min,SEG.field.dec_sec,SEG.field.un_sec);
+		}
+	}
+	else{
+		
+		myprintf("%d%d:%d%d:%d%d/\n",HOU.field.dec_hour|(HOU.field.am_pm<<1),HOU.field.un_hour,MIN.field.dec_min,MIN.field.un_min,SEG.field.dec_sec,SEG.field.un_sec);
+	}
+	vTaskDelay(1000);
+	}
 	
-	uint64_t br = (uint64_t)65536 * (8000000 - 16 * 9600) / 8000000;
+}
+void escrtTiempo(){
+	//uint8_t SEGR,MINR,HOUR,DAYR,DATER,MOR,YEARR;
+	while(1){
+	ptrReloc(SEC_ADDR, SLAVE_ADDR);
+	receiveI2CDataArray(SLAVE_ADDR,rx_buf,BUF_SIZE);
 	
-	SERCOM0->USART.CTRLB.reg = SERCOM_USART_CTRLB_RXEN | SERCOM_USART_CTRLB_TXEN | SERCOM_USART_CTRLB_CHSIZE(0/*8 bits*/);
-
-	SERCOM0->USART.BAUD.reg = (uint16_t)br;
-
-	SERCOM0->USART.CTRLA.reg |= SERCOM_USART_CTRLA_ENABLE;
+	SEG.reg=SEGR;
+	MIN.reg=MINR;
+	HOU.reg=HOUR;
+	DAY.reg=DAYR;
+	DATE.reg=DATER;
+	MON.reg=MOR;
+	YEAR.reg=YEARR;
+	vTaskDelay(250);
+	}
+	
 }
 
 void initUARTRasp(void) {
@@ -107,7 +185,7 @@ void initUARTRasp(void) {
  
    PM->APBCMASK.reg |= PM_APBCMASK_SERCOM2;      // Set the PMUX for SERCOM3 and turn on module in PM
 
-   // Generic clock â€œSERCOM3_GCLK_ID_COREâ€ uses GCLK Generator 0 as source (generic clock source can be
+   // Generic clock “SERCOM3_GCLK_ID_CORE” uses GCLK Generator 0 as source (generic clock source can be
    // changed as per the user needs), so the SERCOM3 clock runs at 8MHz from OSC8M
    GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(SERCOM2_GCLK_ID_CORE) | GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN(0);
 
@@ -135,53 +213,4 @@ void initUARTRasp(void) {
 
    /* synchronization busy */
    while(SERCOM2->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_ENABLE);
-}
-
-uint8_t spiSend(uint8_t data) {
-  uint8_t temp;
-  while(SERCOM1->SPI.INTFLAG.bit.DRE == 0){};
-  SERCOM1->SPI.DATA.reg = data;
-  while(SERCOM1->SPI.INTFLAG.bit.TXC == 0){};
-  while(SERCOM1->SPI.INTFLAG.bit.RXC == 0){};
-  temp = SERCOM1->SPI.DATA.reg;
-  myprintf(" %x", temp);
-  return temp;
-}
-
-void initSPI(void) {
-           PM->APBCMASK.bit.SERCOM1_ = 1;
-           GCLK->CLKCTRL.reg = GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_ID_SERCOM1_CORE;
-           while(GCLK->STATUS.bit.SYNCBUSY);
-           const SERCOM_SPI_CTRLA_Type ctrla = {
-                  .bit.DORD = 0, // Set as MSB first
-                  .bit.CPHA = 0, // Set as Mode 0
-                  .bit.CPOL = 0,  // Keep this as 0
-                  .bit.FORM = 0x0, // Set as SPI frame
-                  .bit.DIPO = 0x3, // Set as MISO on PAD[3]
-                  .bit.DOPO = 0x0, // Set as MOSI on PAD[0], SCK on PAD[1], SS_ on PAD[2]
-                  .bit.MODE = 0x3  // Set as Master
-           };
-           SERCOM1->SPI.CTRLA.reg = ctrla.reg;
-           const SERCOM_SPI_CTRLB_Type ctrlb = {
-                  .bit.RXEN = 1,   // Set as RX enabled
-                  .bit.MSSEN = 0,  // Set as HW SS
-                  .bit.CHSIZE = 0x0  // Set as 8-bit
-           };
-           SERCOM1->SPI.CTRLB.reg = ctrlb.reg;
- 
-           SERCOM1->SPI.BAUD.reg = 0xFF; // Rate is clock / 2
-           // Mux for SERCOM1 PA16,PA17,PA19
-           const PORT_WRCONFIG_Type wrconfig = {
-           .bit.WRPINCFG = 1,
-           .bit.WRPMUX = 1,
-           .bit.PMUX = MUX_PA16C_SERCOM1_PAD0,
-           .bit.PMUXEN = 1,
-           .bit.HWSEL = 1,
-           .bit.INEN = 1,
-           .bit.PINMASK =(uint16_t)((PORT_PA16|PORT_PA17|PORT_PA19) >> 16)
-           };
-           PORT->Group[0].WRCONFIG.reg = wrconfig.reg;
-
-           SERCOM1->SPI.CTRLA.bit.ENABLE = 1;
-           while(SERCOM1->SPI.SYNCBUSY.bit.ENABLE);
 }
