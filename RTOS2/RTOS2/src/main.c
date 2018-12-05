@@ -17,12 +17,6 @@
 #include "RTCCONTROL.h"
 
 
-
-#define LCD_PINCFG	0x50000FC8
-#define LCD_PINMASK 0x00020400
-
-#define PIN13L	0x00020000
-
 #define SLAVE_ADDR 0x68u
 #define BUF_SIZE 7
 
@@ -56,26 +50,24 @@ void UART_SendChar(void);
 int main(void)
 {
     /* Initialize the SAM system */
-    SystemInit();
-		SYSCTRL->OSC8M.bit.PRESC = 0;
-		PORT->Group[0].WRCONFIG.reg = LCD_PINCFG;
-	initUART();
-	UART_Initialize(Baud);
-	initI2C();
-	ClockInit();	
-	//myprintf("holahola");
+    SystemInit();                     //Initicializacion del sistema
+		SYSCTRL->OSC8M.bit.PRESC = 0;		
+	initUART();							//Inicializacion de la comunicacion UART por el port  0 (my print)
+	UART_Initialize(Baud);				//Inicializacion de la comunicacion UART por el port 5 (usb)
+	initI2C();							// Inicializacion del protocolo i2c
+	ClockInit();						// Inicicalizacion del los registros del RTC
+
 	
-	xTaskCreate(escrtTiempo, (signed char *) "RTCpull", 1024, NULL, 1, NULL );
-	xTaskCreate(UART_SendChar, (signed char *) "Timestampsend", 1024, NULL, 2, NULL );
-	xTaskCreate(printStamp, (signed char *) "Serialprint", 1024, NULL, 2, NULL );
+	xTaskCreate(escrtTiempo, (signed char *) "RTCpull", 1024, NULL, 1, NULL ); //Task que implementa la lectura de los registros del RTC
+	xTaskCreate(UART_SendChar, (signed char *) "Timestampsend", 1024, NULL, 2, NULL );// Task que implementa el print a travez de los pines 0 y 1
+	xTaskCreate(printStamp, (signed char *) "Serialprint", 1024, NULL, 2, NULL ); // Task que implementa el print a travez del usb
 
 	vTaskStartScheduler();
 
-    /* Replace with your application code */
     
 }
 
-void ClockInit(){
+void ClockInit(){ 
 	
 	SEG.field.un_sec = 0x0;
 	SEG.field.dec_sec= 0x0;
@@ -127,10 +119,10 @@ void printStamp(){
 	
 }
 void escrtTiempo(){
-	//uint8_t SEGR,MINR,HOUR,DAYR,DATER,MOR,YEARR;
+
 	while(1){
-	ptrReloc(SEC_ADDR, SLAVE_ADDR);
-	receiveI2CDataArray(SLAVE_ADDR,rx_buf,BUF_SIZE);
+	ptrReloc(SEC_ADDR, SLAVE_ADDR);  //Relocalizacion del apuntador de los registros
+	receiveI2CDataArray(SLAVE_ADDR,rx_buf,BUF_SIZE); //Lectura del modulo RTC
 	
 	SEG.reg=SEGR;
 	MIN.reg=MINR;
@@ -144,57 +136,15 @@ void escrtTiempo(){
 	
 }
 
-void initUARTRasp(void) {
-   PORT->Group[0].DIRSET.reg = (1 << 8);       // Set TX Pin direction to output
-   PORT->Group[0].PINCFG[8].reg |= PORT_PINCFG_INEN;    // Set TX Pin config for input enable (required for usart)
-   PORT->Group[0].PINCFG[8].reg |= PORT_PINCFG_PMUXEN;   // enable PMUX
-   PORT->Group[0].PMUX[8>>1].bit.PMUXE = PORT_PMUX_PMUXE_D_Val; // Set the PMUX bit (if pin is even, PMUXE, if odd, PMUXO)
- 
-   PORT->Group[0].DIRCLR.reg = (1 << 9);       // Set RX Pin direction to input
-   PORT->Group[0].PINCFG[9].reg |= PORT_PINCFG_INEN;    // Set RX Pin config for input enable
-   PORT->Group[0].PINCFG[9].reg &= ~PORT_PINCFG_PULLEN;   // enable pullup/down resistor
-   PORT->Group[0].PINCFG[9].reg |= PORT_PINCFG_PMUXEN;   // enable PMUX
-   PORT->Group[0].PMUX[9>>1].bit.PMUXO = PORT_PMUX_PMUXE_D_Val; // Set the PMUX bit (if pin is even, PMUXE, if odd, PMUXO)
- 
-   PM->APBCMASK.reg |= PM_APBCMASK_SERCOM2;      // Set the PMUX for SERCOM3 and turn on module in PM
 
-   // Generic clock “SERCOM3_GCLK_ID_CORE” uses GCLK Generator 0 as source (generic clock source can be
-   // changed as per the user needs), so the SERCOM3 clock runs at 8MHz from OSC8M
-   GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(SERCOM2_GCLK_ID_CORE) | GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN(0);
-
-   // By setting the DORD  bit LSB is transmitted first and setting the RXPO bit as 1
-   // corresponding SERCOM PAD[1] will be used for data reception, PAD[0] will be used as TxD
-   // pin by setting TXPO bit as 0, 16x over-sampling is selected by setting the SAMPR bit as
-   // 0, Generic clock is enabled in all sleep modes by setting RUNSTDBY bit as 1,
-   // USART clock mode is selected as USART with internal clock by setting MODE bit into 1.
-   SERCOM2->USART.CTRLA.reg = SERCOM_USART_CTRLA_DORD | SERCOM_USART_CTRLA_MODE_USART_INT_CLK | SERCOM_USART_CTRLA_RXPO(1/*PAD1*/) | SERCOM_USART_CTRLA_TXPO(0/*PAD0*/);
- 
-   // 8-bits size is selected as character size by setting the bit CHSIZE as 0,
-   // TXEN bit and RXEN bits are set to enable the Transmitter and receiver
-   SERCOM2->USART.CTRLB.reg = SERCOM_USART_CTRLB_RXEN | SERCOM_USART_CTRLB_TXEN | SERCOM_USART_CTRLB_CHSIZE(0/*8 bits*/);
- 
-   /* synchronization busy */
-   while(SERCOM2->USART.SYNCBUSY.bit.CTRLB);
-
-   uint64_t br = (uint64_t)65536 * (8000000 - 16 * 9600) / 8000000; // Variable for baud rate
-
-   // baud register value corresponds to the device communication baud rate
-   SERCOM2->USART.BAUD.reg = (uint16_t)br;
-
-   // SERCOM3 peripheral enabled
-   SERCOM2->USART.CTRLA.reg |= SERCOM_USART_CTRLA_ENABLE;
-
-   /* synchronization busy */
-   while(SERCOM2->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_ENABLE);
-}
 
 void UART_SendChar(void) {
-	// Wait until buffer is available
+
 	static char TxBuff[18] ;
 	while(1){
 		
 		TxBuff[0] = SEG.field.un_sec + '0';
-		TxBuff[1] = SEG.field.dec_sec + '0';
+		TxBuff[1] = SEG.field.dec_sec + '0';o
 		TxBuff[2] = ':';
 		TxBuff[3] = MIN.field.un_min + '0';
 		TxBuff[4] = MIN.field.dec_min + '0';
